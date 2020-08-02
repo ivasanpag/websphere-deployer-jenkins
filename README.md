@@ -13,6 +13,7 @@ Dependencies
 Plugin depends on some IBM libraries. They must be installed in your local repository to compile the plugin and copied in the Jenkins lib to build the project:
 
 > **com.ibm.ws.admin.client_8.5.0.jar** - ($WAS_INSTALL_ROOT/runtimes)
+>
 > **com.ibm.ws.orb_8.5.0.jar** - ($WAS_INSTALL_ROOT/runtimes)
 
 ## Configuration
