@@ -1,14 +1,14 @@
 package org.jenkinsci.plugins.websphere.services.deployment;
 
-import lombok.Data;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.ToString;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Hashtable;
+import java.util.List;
 
-// @Data
 @ToString
 public class Artifact {
 
@@ -57,19 +57,18 @@ public class Artifact {
     private String virtualHost;
     @Getter
     @Setter
-    private String sharedLibName;
-    @Getter
-    @Setter
     private String edition;
-    @Getter
     @Setter
-    private boolean forceUninstallation;
+    private List<DeploymentTaskArtifact> deploymentTaskArtifactList;
 
-    @Getter
-    @Setter
-    private String datasource;
     private Hashtable<String,Object> preferences;
-    
+
+    public List<DeploymentTaskArtifact> getDeploymentTaskArtifactList() {
+        if(deploymentTaskArtifactList == null)
+            deploymentTaskArtifactList = new ArrayList<>();
+        return deploymentTaskArtifactList;
+    }
+
     public String getTypeName() {
     	switch(type) {
 			case TYPE_WAR:

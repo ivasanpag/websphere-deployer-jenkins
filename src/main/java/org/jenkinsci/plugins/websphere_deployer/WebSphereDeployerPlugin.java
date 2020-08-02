@@ -36,6 +36,7 @@ import org.jenkinsci.plugins.websphere.services.deployment.Artifact;
 import org.jenkinsci.plugins.websphere.services.deployment.DeploymentServiceException;
 import org.jenkinsci.plugins.websphere.services.deployment.Server;
 import org.jenkinsci.plugins.websphere.services.deployment.WebSphereDeploymentService;
+import org.jenkinsci.plugins.websphere.utils.DeploymentTaskUtils;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
@@ -65,9 +66,8 @@ public class WebSphereDeployerPlugin extends Notifier {
     private final String targets;
     private final String applicationName;
     private final String virtualHost;
-    private final String sharedLibName;
     private final String edition;
-    private final String datasource;
+    private final String deploymentTaskProperties;
     private final boolean fullSynchronization;
     private final boolean precompile;
     private final boolean reloading;
@@ -76,7 +76,6 @@ public class WebSphereDeployerPlugin extends Notifier {
     private final boolean distribute;
     private final boolean rollback;
     private final boolean unstableDeploy;
-    private final boolean forceUninstallation;
     private final WebSphereSecurity security;
 
     @DataBoundConstructor
@@ -93,7 +92,6 @@ public class WebSphereDeployerPlugin extends Notifier {
                                    String targets,
                                    String applicationName,
                                    String virtualHost,
-                                   String sharedLibName,
                                    String edition,
                                    boolean fullSynchronization,
                                    boolean precompile,
@@ -103,10 +101,9 @@ public class WebSphereDeployerPlugin extends Notifier {
                                    boolean distribute,
                                    boolean rollback,
                                    boolean unstableDeploy,
-                                   boolean forceUninstallation,
                                    String classLoaderPolicy,
                                    String classLoaderOrder,
-                                   String datasource) {
+                                   String deploymentTaskProperties) {
     	this.context = context;
     	this.targets = targets;
     	this.installPath = installPath;
@@ -131,9 +128,7 @@ public class WebSphereDeployerPlugin extends Notifier {
         this.classLoaderOrder = classLoaderOrder;
         this.applicationName = applicationName;
         this.virtualHost = virtualHost;
-        this.sharedLibName = sharedLibName;
-        this.forceUninstallation = forceUninstallation;
-        this.datasource = datasource;
+        this.deploymentTaskProperties = deploymentTaskProperties;
     }
 
     @Override
@@ -169,17 +164,7 @@ public class WebSphereDeployerPlugin extends Notifier {
                     if(isFullSynchronization()) {
                     	service.fullyResynchronizeNodes();
                     }
-
-                    log(listener,"Searching all resources for " + artifact.getSharedLibName() );
-                    searchAll(artifact, listener, service);
-
-                    if(StringUtils.trimToNull(artifact.getSharedLibName()) != null) {
-                        String[] sharedLibraries = artifact.getSharedLibName().split(",");
-                        log(listener,"SharedLibraries to use " + artifact.getSharedLibName() );
-
-
-
-                    }
+                    editArtifact(artifact,listener,service);
                     startArtifact(artifact,listener,service);
 
                     if(rollback) {
@@ -213,13 +198,6 @@ public class WebSphereDeployerPlugin extends Notifier {
             listener.getLogger().println("Unable to deploy to IBM WebSphere Application Server, Build Result = " + buildResult);
         }
         return true;
-    }
-
-    private void searchAll(Artifact artifact, BuildListener listener, WebSphereDeploymentService service) {
-        if(service.isArtifactInstalled(artifact)) {
-            listener.getLogger().println("SearchAll Application '"+artifact.getAppName()+"'...");
-            service.searchAll(artifact);
-        }
     }
 
     private boolean shouldDeploy(Result result) {
@@ -262,7 +240,8 @@ public class WebSphereDeployerPlugin extends Notifier {
     		artifact.setSourcePath(installablePath);
     		try {
     			updateArtifact(artifact, listener, service);
-    			startArtifact(artifact,listener,service);
+    			editArtifact(artifact, listener, service);
+    			startArtifact(artifact, listener, service);
     			log(listener,"Rollback of '"+artifact.getAppName()+"' was successful");
     		} catch(Exception e) {
     			e.printStackTrace();
@@ -323,6 +302,16 @@ public class WebSphereDeployerPlugin extends Notifier {
         }
     }
 
+    private void editArtifact(Artifact artifact,BuildListener listener,WebSphereDeploymentService service) throws Exception {
+
+        listener.getLogger().println("Editing Application '"+artifact.getAppName()+"'...");
+        try {
+            service.editArtifact(artifact, Integer.parseInt(getDeploymentTimeout()));
+        } catch(NumberFormatException e) {
+            service.editArtifact(artifact, 5);
+        }
+    }
+
     private void startArtifact(Artifact artifact,BuildListener listener,WebSphereDeploymentService service) throws Exception {
 		if(StringUtils.trimToNull(artifact.getEdition()) != null) {
 			listener.getLogger().println(artifact.getAppName()+ " will not be started automatically because 'Edition' management was used in the jenkins configuration");
@@ -365,6 +354,7 @@ public class WebSphereDeployerPlugin extends Notifier {
         } else {
         	artifact.setVirtualHost(virtualHost);
         }
+
         artifact.setClassLoaderOrder(classLoaderOrder);
         artifact.setClassLoaderPolicy(classLoaderPolicy);
         artifact.setTargets(targets);
@@ -374,10 +364,12 @@ public class WebSphereDeployerPlugin extends Notifier {
         if(StringUtils.trimToNull(edition) != null) {
         	artifact.setEdition(edition);	
         }
-        if(StringUtils.trimToNull(datasource) != null) {
-            artifact.setDatasource(datasource);
-        }
         artifact.setPrecompile(isPrecompile());
+
+        if(StringUtils.trimToNull(deploymentTaskProperties) != null) {
+            artifact.setDeploymentTaskArtifactList(DeploymentTaskUtils.fillDeploymentTaskArtifacts(deploymentTaskProperties));
+        }
+
         artifact.setSourcePath(new File(path.getRemote()));
         if(StringUtils.trimToNull(applicationName) != null) {
         	artifact.setAppName(applicationName);
@@ -387,6 +379,8 @@ public class WebSphereDeployerPlugin extends Notifier {
         if(artifact.getType() == Artifact.TYPE_WAR) {
             generateEAR(artifact, listener, service);
         }
+        log(listener,"Artifact: " + artifact.toString());
+
         return artifact;
     }
 
@@ -494,42 +488,6 @@ public class WebSphereDeployerPlugin extends Notifier {
 
         public DescriptorImpl() {
             load();
-        }
-
-        public FormValidation doListBean(@QueryParameter("ipAddress")String ipAddress,
-                                                 @QueryParameter("connectorType")String connectorType,
-                                                 @QueryParameter("port")String port,
-                                                 @QueryParameter("username")String username,
-                                                 @QueryParameter("password")String password,
-                                                 @QueryParameter("trustAll")String trustAll) throws IOException, ServletException {
-            WebSphereDeploymentService service = new WebSphereDeploymentService();
-            try {
-                if(!connectToService(service, connectorType,ipAddress, username, password, port, trustAll)) {
-                    String destination = "<Jenkins_Root>"+File.separator+"plugins"+File.separator+"websphere-deployer"+File.separator+"WEB-INF"+File.separator+"lib"+File.separator;
-                    return FormValidation.warning("Cannot find the required IBM WebSphere Application Server jar files in '"+destination+"'. Please copy them from IBM WebSphere Application Server (see plugin documentation)");
-
-                }
-                List<String> beans = service.listMBean();
-                StringBuffer buffer = new StringBuffer();
-                buffer.append("\r\n\r\n");
-                for(String b: beans) {
-                    if(buffer.length() > 0) {
-                        buffer.append("\r\n");
-                    }
-                    buffer.append(b);
-                }
-                if(buffer.toString().trim().equals("")) {
-                    return FormValidation.warning("No beans in WebSphere");
-                }
-                return FormValidation.ok(buffer.toString());
-            } catch (Exception e) {
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                PrintStream p = new PrintStream(out,true,"UTF-8");
-                e.printStackTrace(p);
-                return FormValidation.error("Failed to list beans =>" + new String(out.toByteArray(),"UTF-8"));
-            } finally {
-                service.disconnect();
-            }
         }
 
         public FormValidation doShowApplications(@QueryParameter("ipAddress")String ipAddress,

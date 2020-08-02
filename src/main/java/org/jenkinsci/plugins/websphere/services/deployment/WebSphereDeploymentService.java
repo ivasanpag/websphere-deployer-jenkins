@@ -7,12 +7,14 @@ import com.ibm.websphere.management.application.AppManagement;
 import com.ibm.websphere.management.application.AppManagementProxy;
 import com.ibm.websphere.management.application.AppNotification;
 import com.ibm.websphere.management.application.client.AppDeploymentController;
+import com.ibm.websphere.management.application.client.AppDeploymentException;
 import com.ibm.websphere.management.application.client.AppDeploymentTask;
 import com.ibm.websphere.management.exception.AdminException;
 import com.ibm.websphere.management.exception.ConnectorException;
 import hudson.model.BuildListener;
 import org.apache.commons.lang.ArrayUtils;
 import org.apache.commons.lang.StringUtils;
+import org.jenkinsci.plugins.websphere.utils.DeploymentTaskUtils;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 
@@ -27,6 +29,7 @@ import java.io.*;
 import java.nio.charset.Charset;
 import java.util.*;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -73,27 +76,12 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
 
             List<Server> servers = listServers();
             List<String> apps = new ArrayList<>();
-            for(Server server : servers) {
+            for (Server server : servers) {
                 apps.addAll(appManagementProxy.listApplications(server.getTarget(), defaultBindingPreferences, null));
             }
             Collections.sort(apps);
 
             return apps;
-        } catch (Exception e) {
-            e.printStackTrace();
-            throw new DeploymentServiceException(e.getMessage(), e);
-        }
-    }
-
-    public List<String> listMBean() {
-        try {
-            if (!isConnected()) {
-                throw new DeploymentServiceException("Cannot list servers, please connect to WebSphere first");
-            }
-            List<String> beans = new ArrayList<>();
-
-
-            return beans;
         } catch (Exception e) {
             e.printStackTrace();
             throw new DeploymentServiceException(e.getMessage(), e);
@@ -275,11 +263,6 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
             controller.saveAndClose();
 
             Hashtable<String, Object> config = controller.getAppDeploymentSavedResults();
-            log.info("GETAPPNAME Config Deployment App Results \n");
-
-            for(Map.Entry<String, Object> entry : config.entrySet()) {
-                log.info("Config: " + entry.getKey() + " " + entry.getValue().toString());
-            }
             return (String) config.get(AppConstants.APPDEPL_APPNAME);
         } catch (Exception e) {
             e.printStackTrace();
@@ -298,14 +281,12 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
         if (StringUtils.trimToNull(artifact.getVirtualHost()) != null) {
             defaultBinding.put(AppConstants.APPDEPL_DFLTBNDG_VHOST, artifact.getVirtualHost());
         }
-        if(StringUtils.trimToNull(artifact.getDatasource()) != null) {
-            defaultBinding.put(AppConstants.APPDEPL_DFLTBNDG_DDSJNDI, artifact.getDatasource()); //  props.put (AppConstants.APPDEPL_DFLTBNDG_DDSJNDI, "jdbc/MyDataSource");
-        }
+
         defaultBinding.put(AppConstants.APPDEPL_DFLTBNDG_FORCE, AppConstants.YES_KEY);
         /** end handle default binding **/
         defaultBindingPreferences.put(AppConstants.APPDEPL_DFLTBNDG, defaultBinding);
 
-        setSharedLibraries(artifact.getSourcePath().getAbsolutePath(), defaultBindingPreferences, artifact.getSharedLibName());
+        // setSharedLibraries(artifact.getSourcePath().getAbsolutePath(), defaultBindingPreferences, artifact.getSharedLibName());
 
         AppDeploymentController controller = AppDeploymentController.readArchive(artifact.getSourcePath().getAbsolutePath(), defaultBindingPreferences);
 
@@ -327,10 +308,6 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
             options.put(AppConstants.APPDEPL_EDITION, artifact.getEdition());
             options.put(AppConstants.APPDEPL_EDITION_DESC, String.valueOf("Edition Timestamp: " + System.currentTimeMillis()));
 
-        }
-        if (StringUtils.trimToNull(artifact.getSharedLibName()) != null) {
-            options.put(AppConstants.APPDEPL_SHAREDLIB_NAME, artifact.getSharedLibName());
-            options.put(AppConstants.APPDEPL_MAP_SHAREDLIB, artifact.getSharedLibName());
         }
         if (!artifact.isJspReloading()) {
             options.put(AppConstants.APPDEPL_JSP_RELOADINTERVAL, Integer.valueOf(0));
@@ -366,6 +343,7 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
         return options;
     }
 
+
     public void installArtifact(Artifact artifact) {
         if (!isConnected()) {
             throw new DeploymentServiceException("Cannot install artifact, no connection to IBM WebSphere Application Server exists");
@@ -388,7 +366,6 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
             if (!notifyListener.isSuccessful()) {
                 throw new DeploymentServiceException("Application not successfully deployed: " + notifyListener.getMessage());
             }
-
 
 
         } catch (Exception e) {
@@ -462,6 +439,9 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
         try {
             AppManagement appManagementProxy = AppManagementProxy.getJMXProxyForClient(getAdminClient());
             if (waitForApplicationDistribution(appManagementProxy, artifact, deploymentTimeout * 60)) {
+                // Before starting the applicaion, let install the libraries.
+                // editInstalledArtifact(artifact.getAppName(), artifact);
+
                 String targetsStarted = appManagementProxy.startApplication(artifact.getAppName(), buildDeploymentPreferences(artifact), null);
                 log.info("Application was started on the following targets: " + targetsStarted);
                 if (targetsStarted == null) {
@@ -469,6 +449,23 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
                     //TODO check if app really is started, if not throw an error
                     throw new DeploymentServiceException("Application did not start successfully. WAS JVM logs should contain more detailed information.");
                 }
+            } else {
+                throw new DeploymentServiceException("Distribution of application did not succeed on all nodes.");
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            throw new DeploymentServiceException("Could not start artifact '" + artifact.getAppName() + "': " + e.toString());
+        }
+    }
+
+    public void editArtifact(Artifact artifact, int deploymentTimeout) {
+        try {
+            AppManagement appManagementProxy = AppManagementProxy.getJMXProxyForClient(getAdminClient());
+            if (waitForApplicationDistribution(appManagementProxy, artifact, deploymentTimeout * 60)) {
+                // Before starting the applicaion, let modify all the task.
+                editInstalledArtifact(artifact.getAppName(), artifact);
+                log.info("Artifact edition has finished");
+
             } else {
                 throw new DeploymentServiceException("Distribution of application did not succeed on all nodes.");
             }
@@ -635,22 +632,6 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
         return "WebSphere:" + StringUtils.join(elements, ",");
     }
 
-    public void setConnectorType(String type) {
-        this.connectorType = type;
-    }
-
-    public String getConnectorType() {
-        return this.connectorType;
-    }
-
-    public void setVerbose(boolean verbose) {
-        this.verbose = verbose;
-    }
-
-    public void setBuildListener(BuildListener listener) {
-        this.buildListener = listener;
-    }
-
     /*
      * Checks the listener and figures out the aggregate distribution status of all nodes
      */
@@ -711,69 +692,108 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
         this.trustAll = trustAll;
     }
 
-    public void searchAll(Artifact artifact) {
+    private void editInstalledArtifact(String appName, Artifact artifact) {
         try {
+            if (!isConnected()) {
+                throw new DeploymentServiceException("Websphere connection has lost");
+            }
+
+            if (artifact.getDeploymentTaskArtifactList().isEmpty())
+                return;
+
             AppManagement appManagementProxy = AppManagementProxy.getJMXProxyForClient(getAdminClient());
-            Hashtable<String, Object> defaultBindingPreferences = new Hashtable<String, Object>();
+            Hashtable<String, Object> defaultBindingPreferences = new Hashtable<>();
             defaultBindingPreferences.put(AppConstants.APPDEPL_LOCALE, Locale.getDefault());
 
-            Vector<AppDeploymentTask> applicationInfoVector = appManagementProxy.getApplicationInfo(artifact.getAppName(), buildDeploymentPreferences(artifact), null);
-            for (AppDeploymentTask applicationInfo : applicationInfoVector)
-                log.info("ApplicationInfo " + applicationInfo.toString() + "\r\n");
+            List<String> taskToChangeNames = artifact.getDeploymentTaskArtifactList()
+                    .stream()
+                    .map(task -> task.getTaskName())
+                    .collect(Collectors.toList());
+
+            buildListener.getLogger().println("OptionsToModify=" + taskToChangeNames.size() + " Tasks: " + taskToChangeNames.toString());
 
 
-            for(Object resource: appManagementProxy.searchResources(artifact.getAppName(), defaultBindingPreferences, null))
-                    log.info("Resource : " + resource.toString());
+            // https://www.ibm.com/support/knowledgecenter/SSEQTP_9.0.5/com.ibm.websphere.base.doc/ae/rxml_taskoptions.html
+            Vector<AppDeploymentTask> tasks = appManagementProxy.getApplicationInfo(appName, defaultBindingPreferences, null);
+            tasks.stream()
+                    .filter(appDeploymentTask -> taskToChangeNames.contains(appDeploymentTask.getName()))
+                    .forEach(appDeploymentTask -> {
 
+                        try {
 
-            // Null for ears
-            for(Object url: appManagementProxy.listURIs(artifact.getAppName(), null, defaultBindingPreferences, null))
-                    log.info("URL : " + url.toString());
+                            String[][] modifiedData = modifyTask(appDeploymentTask, artifact.getDeploymentTaskArtifactList());
+                            appDeploymentTask.setTaskData(modifiedData);
+                            if (verbose)
+                                buildListener.getLogger().println("AppTaskData: " + DeploymentTaskUtils.prettyAppDeploymentTask(appDeploymentTask));
+                        } catch (AppDeploymentException e) {
+                            log.warning("Error modifying application info. Error: " + e.toString());
+                        }
 
-            listMBean();
+                    });
+
+            appManagementProxy.setApplicationInfo(appName, defaultBindingPreferences, null, tasks);
+
 
         } catch (Exception e) {
             e.printStackTrace();
+            throw new DeploymentServiceException(e.getMessage(), e);
         }
-
     }
 
-    public void setSharedLibraries(String file, Hashtable<String, Object> preferences, String libName) throws Exception {
-        AppDeploymentController controller = AppDeploymentController.readArchive(file, preferences);
-        /*
-       Config: mapSharedLib {META-INF/application.xml=,...war=}
-        Config: sharedLibRelationship {META-INF/application.xml={origRelationship=, matchTarget=AppDeploymentOption.Yes, relationship=},
-...war={origRelationship=, matchTarget=AppDeploymentOption.Yes, relationship=}}
-         */
-        log.info("libName " + libName);
-        AppDeploymentTask task = controller.getFirstTask();
-        while (task != null) {
-            String[][] data = task.getTaskData();
-            if(task.getName().equalsIgnoreCase("MapSharedLibForMod") || task.getName().equalsIgnoreCase("SharedLibRelationship")) {
-                // Aqui tengo que modificar la tarea
-                try {
-                    for (int i = 0; i < data.length; i++) {
-                        for (int j = 0; j < data[i].length; j++) {
-                            log.info("Task Data Shared Library: " + data[i][j] + ". i=" + i + " | j=" + j);
-                            if (data[i][j].contains(".war") && task.getName().equalsIgnoreCase("MapSharedLibForMod"))
-                                data[i][j + 1] = libName;
+    private String[][] modifyTask(AppDeploymentTask task, List<DeploymentTaskArtifact> deploymentTaskArtifacts) {
+        String[][] modifiedData = task.getTaskData();
+
+        deploymentTaskArtifacts.stream()
+                .filter(taskArtifact -> taskArtifact.getTaskName().equals(task.getName()))
+                .forEach(taskArtifact -> {
+                    try {
+                        if (modifiedData != null) {
+
+                            int colToChangeIndex = -1;
+                            String[] colNames = task.getColumnNames();
+                            // Column Names
+                            for (int i = 0; i < colNames.length; i++) {
+                                if (colNames[i].equalsIgnoreCase(taskArtifact.getColumnName()))
+                                    colToChangeIndex = i;
+                            }
+
+                            // Modified data (0 is the columns)
+                            for (int i = 1; i < modifiedData.length; i++) {
+                                for (int j = 0; j < modifiedData[i].length; j++) {
+
+                                    String currentDataCol = modifiedData[i][j];
+                                    if (taskArtifact.getPropertiesToChange().containsKey(currentDataCol)) {
+                                        modifiedData[i][colToChangeIndex] = taskArtifact.getPropertiesToChange().get(currentDataCol);
+                                    }
+
+                                }
+                            }
+
                         }
+
+                    } catch (Exception e) {
+                        log.warning("Error modifying task " + task.getName() + " caused by " + e);
                     }
-                } catch (Exception e) {
-                    log.info("ERROR " + e.getMessage());
-                }
-            }
-            task.setTaskData(data);
-            task = controller.getNextTask();
-        }
+                });
 
-        controller.saveAndClose();
+        return modifiedData;
+    }
 
-        Hashtable<String, Object> config = controller.getAppDeploymentSavedResults();
-        log.info("SETSHAREDLIBRARIES Config Deployment App Results \n");
-        for(Map.Entry<String, Object> entry : config.entrySet()) {
-            log.info("Config: " + entry.getKey() + " " + entry.getValue().toString());
-        }
+
+    public void setConnectorType(String type) {
+        this.connectorType = type;
+    }
+
+    public String getConnectorType() {
+        return this.connectorType;
+    }
+
+    public void setVerbose(boolean verbose) {
+        this.verbose = verbose;
+    }
+
+    public void setBuildListener(BuildListener listener) {
+        this.buildListener = listener;
     }
 
 }

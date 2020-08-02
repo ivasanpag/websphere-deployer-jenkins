@@ -58,9 +58,6 @@
                 </j:choose>
             </select>
           </f:entry>
-          <f:entry title="Force uninstallation" field="forceUninstallation">
-                      <f:checkbox checked="${instance.forceUninstallation}" default="false"/>
-           </f:entry>
           <f:entry title="Rollback On Error" field="rollback">
             <f:checkbox checked="${instance.rollback}" default="false"/>
           </f:entry>
@@ -81,9 +78,6 @@
 				       method="loadTargets" with="ipAddress,connectorType,port,trustAll,username,password"/>
 		    <f:validateButton title="Show Installed Apps" progress="Loading available apps"
                        				       method="showApplications" with="ipAddress,connectorType,port,trustAll,username,password"/>
-             <f:validateButton title="List Beans" progress="Loading beans"
-                         method="listBean" with="ipAddress,connectorType,port,trustAll,username,password"/>
-
           <f:entry title="Deployment Timeout (minutes)" field="deploymentTimeout">
             <f:textbox />
           </f:entry>       
@@ -125,17 +119,15 @@
           <f:entry title="Virtual Host" field="virtualHost">
             <f:textbox value="${instance.virtualHost}" />
           </f:entry>
-           <f:entry title="Datasource" field="datasource">
-             <f:textbox value="${instance.datasource}" />
-          </f:entry>
-          <f:entry title="Shared Lib Name" field="sharedLibName">
-            <f:textbox value="${instance.sharedLibName}" />
-          </f:entry>             	
           <f:entry title="Remote App. Install Path" field="installPath">
             <f:textbox value="${instance.installPath}"/>
           </f:entry>           
           <f:entry title="Deploy if build is unstable" field="unstableDeploy">
             <f:checkbox checked="${instance.unstableDeploy}" default="true"/>
+          </f:entry>
+          <f:entry title="Deployment Task Options" field="deploymentTaskProperties">
+                 <f:textarea default="TaskToChange;ColumnToChange;UniqueProperty=value1;UniqueProperty=value2">
+                 </f:textarea>
           </f:entry>
           <f:entry title="Distribute Application" field="distribute">
             <f:checkbox checked="${instance.distribute}" default="true"/>
