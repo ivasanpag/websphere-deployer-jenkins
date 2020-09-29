@@ -1,5 +1,6 @@
 package org.jenkinsci.plugins.websphere.services.deployment;
 
+import com.ibm.websphere.management.application.AppConstants;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.ToString;
@@ -94,4 +95,8 @@ public class Artifact {
 	public void setPreferences(Hashtable<String, Object> preferences) {
 		this.preferences = new Hashtable<>(preferences);
 	}
+
+	public int getClassLoaderInt() {
+        return classLoaderOrder != null && classLoaderOrder.equalsIgnoreCase("PARENT_LAST") ? 1 : 0;
+    }
 }

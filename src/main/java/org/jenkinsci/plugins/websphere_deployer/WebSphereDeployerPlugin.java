@@ -627,7 +627,7 @@ public class WebSphereDeployerPlugin extends Notifier {
         }
 
         public String getDisplayName() {
-        	return "Deploy To IBM WebSphere Application Server 8.5.5";
+        	return "Deploy To IBM WebSphere Application Server 8.5.5 / 9.0";
         }
 
         @Override

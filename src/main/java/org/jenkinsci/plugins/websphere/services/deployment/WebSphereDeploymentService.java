@@ -2,6 +2,7 @@ package org.jenkinsci.plugins.websphere.services.deployment;
 
 import com.ibm.websphere.management.AdminClient;
 import com.ibm.websphere.management.AdminClientFactory;
+import com.ibm.websphere.management.Session;
 import com.ibm.websphere.management.application.AppConstants;
 import com.ibm.websphere.management.application.AppManagement;
 import com.ibm.websphere.management.application.AppManagementProxy;
@@ -9,6 +10,10 @@ import com.ibm.websphere.management.application.AppNotification;
 import com.ibm.websphere.management.application.client.AppDeploymentController;
 import com.ibm.websphere.management.application.client.AppDeploymentException;
 import com.ibm.websphere.management.application.client.AppDeploymentTask;
+import com.ibm.websphere.management.configservice.ConfigService;
+import com.ibm.websphere.management.configservice.ConfigServiceHelper;
+import com.ibm.websphere.management.configservice.ConfigServiceProxy;
+import com.ibm.websphere.management.deployment.exception.DeploymentException;
 import com.ibm.websphere.management.exception.AdminException;
 import com.ibm.websphere.management.exception.ConnectorException;
 import hudson.model.BuildListener;
@@ -19,9 +24,7 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 
 import javax.enterprise.deploy.spi.Target;
-import javax.management.MalformedObjectNameException;
-import javax.management.NotificationFilterSupport;
-import javax.management.ObjectName;
+import javax.management.*;
 import javax.net.ssl.SSLSocketFactory;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -326,7 +329,7 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
             options.put(AppConstants.APPDEPL_INSTALL_DIR, artifact.getInstallPath());
         }
         if (StringUtils.trimToNull(artifact.getClassLoaderOrder()) != null) {
-            options.put(AppConstants.APPDEPL_CLASSLOADINGMODE, artifact.getClassLoaderOrder());
+            options.put(AppConstants.APPDEPL_CLASSLOADINGMODE, artifact.getClassLoaderInt());
         }
         if (StringUtils.trimToNull(artifact.getClassLoaderPolicy()) != null) {
             options.put(AppConstants.APPDEPL_CLASSLOADERPOLICY, artifact.getClassLoaderPolicy());
@@ -444,6 +447,7 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
 
                 String targetsStarted = appManagementProxy.startApplication(artifact.getAppName(), buildDeploymentPreferences(artifact), null);
                 log.info("Application was started on the following targets: " + targetsStarted);
+                log.info("Application build deployment " + buildDeploymentPreferences(artifact).toString());
                 if (targetsStarted == null) {
                     //wait X seconds to let deployment settle
                     //TODO check if app really is started, if not throw an error
@@ -465,7 +469,8 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
                 // Before starting the applicaion, let modify all the task.
                 editInstalledArtifact(artifact.getAppName(), artifact);
                 log.info("Artifact edition has finished");
-
+                updateArtifactConfig(artifact.getAppName(), artifact);
+                log.info("Artifact edition modules has finished");
             } else {
                 throw new DeploymentServiceException("Distribution of application did not succeed on all nodes.");
             }
@@ -733,6 +738,8 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
 
             appManagementProxy.setApplicationInfo(appName, defaultBindingPreferences, null, tasks);
 
+            if(verbose)
+                tasks.stream().forEach(appDeploymentTask -> buildListener.getLogger().println("AppTaskData: " + DeploymentTaskUtils.prettyAppDeploymentTask(appDeploymentTask)));
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -779,6 +786,36 @@ public class WebSphereDeploymentService extends AbstractDeploymentService {
         return modifiedData;
     }
 
+    private void updateArtifactConfig(String appName, Artifact artifact) throws DeploymentException {
+        Session session = new Session();
+        ConfigServiceProxy configServiceProxy = null;
+        try {
+            configServiceProxy = new ConfigServiceProxy(getAdminClient());
+            ObjectName[] classLoadersId = configServiceProxy.resolve(session,
+                    "Deployment=" + appName + "\":ApplicationDeployment:WebModuleDeployment:");
+
+            AttributeList attrList = new AttributeList();
+            AttributeList clList = (AttributeList) configServiceProxy.getAttribute(session, classLoadersId[0],
+                    "classloader");
+            clList.stream().forEach(o -> log.info("Attribute: " + o.toString()));
+
+            String mode = artifact.getClassLoaderOrder() != null && artifact.getClassLoaderOrder().equals("1") ? "PARENT_LAST" : "PARENT_FIRST";
+            ConfigServiceHelper.setAttributeValue(clList, "mode", mode);
+            attrList.add(new Attribute("classloader", clList));
+            configServiceProxy.setAttributes(session, classLoadersId[0], attrList);
+            configServiceProxy.save(session, true);
+
+        } catch (Exception ex) {
+            log.warning("Not able to update " + appName +"." + ex.getMessage());
+        } finally {
+            try {
+                if(configServiceProxy != null)
+                    configServiceProxy.discard(session);
+            } catch (Exception csEx) {
+                log.warning("Not able to discard updateArtifact " + appName + " session" + csEx);
+            }
+        }
+    }
 
     public void setConnectorType(String type) {
         this.connectorType = type;
